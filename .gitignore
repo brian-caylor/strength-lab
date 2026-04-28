@@ -1,0 +1,22 @@
+# Personal builds — keep your training data out of git
+workouts.json
+"Workout Dashboard.html"
+*.local.html
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Netlify
+.netlify/
