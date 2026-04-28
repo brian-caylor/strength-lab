@@ -333,17 +333,17 @@
       `${totalSessions} sessions · ${fmt(totalSets)} sets · ${range}`;
   }
 
-  // ---------- Shared: load markdown into the dashboard ----------
+  // ---------- Shared: load workout data (CSV or markdown) ----------
   // Used by Welcome's drop-zone, the "Try sample data" button, and the Import tab.
   function loadMarkdown(text, mode /* 'replace' | 'merge' */, onResult) {
     try {
-      const parsed = parseMarkdown(text);
+      const fmt = detectFormat(text);
+      const parsed = parseWorkouts(text);
       if (!parsed.sessions.length) {
-        return onResult({
-          ok: false,
-          msg:
-            'No sessions found. Make sure the file has date headers like "Monday, April 27, 2026 at 5:37 AM".',
-        });
+        const hint = fmt === 'csv'
+          ? 'No sessions found. Make sure the file is a Strong CSV export with the header row "Date,Workout Name,Duration,…".'
+          : 'No sessions found. For markdown, expect date headers like "Monday, April 27, 2026 at 5:37 AM".';
+        return onResult({ ok: false, msg: hint });
       }
       if (mode === 'merge' && DATA && DATA.sessions) {
         const merged = {};
@@ -401,9 +401,9 @@
         <div class="welcome-actions">
           <div class="dropzone" id="welcome-drop">
             <div class="dz-emoji">▲</div>
-            <div class="dz-title">Drop a Strong-app export here</div>
-            <div class="dz-sub">…or click to upload (.md or .txt)</div>
-            <input type="file" id="welcome-file" accept=".md,.txt,text/plain,text/markdown" hidden />
+            <div class="dz-title">Drop your Strong CSV export here</div>
+            <div class="dz-sub">…or click to upload — accepts .csv, .md, or .txt</div>
+            <input type="file" id="welcome-file" accept=".csv,.md,.txt,text/csv,text/plain,text/markdown" hidden />
           </div>
           ${sampleAvailable
             ? `<div class="welcome-or">or</div>
@@ -427,8 +427,8 @@
         </div>
 
         <div class="welcome-foot">
-          How to export from Strong: open the app → Settings → Export Data → choose CSV or Markdown.
-          This dashboard accepts the markdown export (or any file with the same line shape).
+          How to export from Strong: open the app → <strong>Settings → Export Data → CSV</strong>. Drop the
+          resulting <code>strong.csv</code> here. Markdown exports (or sets pasted into a Google Doc) also work.
         </div>
       </div>
     `;
@@ -1200,19 +1200,19 @@
     app.innerHTML = `
       <div class="section-head">
         <h1>Import data</h1>
-        <span class="sub">Drop a file, paste markdown, or load the sample data</span>
+        <span class="sub">Drop a file, paste data, or load the sample. Auto-detects CSV vs. markdown.</span>
       </div>
 
       <div class="grid cols-2" style="margin-bottom:18px;">
         <div class="dropzone" id="import-drop">
           <div class="dz-emoji">⬇</div>
-          <div class="dz-title">Drop a Strong-app export here</div>
-          <div class="dz-sub">…or click to choose a .md / .txt file</div>
-          <input type="file" id="import-file" accept=".md,.txt,text/plain,text/markdown" hidden />
+          <div class="dz-title">Drop your Strong CSV (or .md) here</div>
+          <div class="dz-sub">…or click to choose a .csv / .md / .txt file</div>
+          <input type="file" id="import-file" accept=".csv,.md,.txt,text/csv,text/plain,text/markdown" hidden />
         </div>
         <div class="panel">
-          <h2>Or paste markdown</h2>
-          <textarea id="paste" placeholder="Monday\nMonday, April 27, 2026 at 5:37 AM\n\nShoulder Press (Machine)\nSet 1: 80 lb × 10..."></textarea>
+          <h2>Or paste data</h2>
+          <textarea id="paste" placeholder="Paste the contents of strong.csv here — or paste your markdown export. The format is auto-detected."></textarea>
           <div class="import-actions" style="justify-content:flex-start;">
             <button class="btn" id="parse-btn">${empty ? 'Load' : 'Merge'}</button>
             ${empty ? '' : '<button class="btn-ghost" id="replace-btn">Replace all</button>'}
@@ -1311,6 +1311,132 @@
     return 'Other';
   }
   function epleyJS(w, r) { return r <= 0 ? 0 : (r === 1 ? w : w * (1 + r / 30)); }
+
+  // ---- Strong CSV parser ----
+  // Cols: Date, Workout Name, Duration, Exercise Name, Set Order,
+  //       Weight, Reps, Distance, Seconds, Notes, Workout Notes, RPE
+  function parseCSVLine(line) {
+    // Handles quoted fields with commas. Strong escapes embedded quotes by doubling them.
+    const out = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQ) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { inQ = false; }
+        else cur += c;
+      } else {
+        if (c === ',') { out.push(cur); cur = ''; }
+        else if (c === '"') inQ = true;
+        else cur += c;
+      }
+    }
+    out.push(cur);
+    return out;
+  }
+  function parseStrongCSV(text) {
+    const rows = text.replace(/\r/g, '').split('\n').filter((r) => r.length);
+    if (!rows.length) return { sessions: [] };
+    const header = parseCSVLine(rows[0]);
+    const idx = (name) => header.indexOf(name);
+    const I = {
+      date: idx('Date'), wname: idx('Workout Name'), dur: idx('Duration'),
+      ex: idx('Exercise Name'), so: idx('Set Order'),
+      w: idx('Weight'), r: idx('Reps'), d: idx('Distance'), s: idx('Seconds'),
+      n: idx('Notes'), wn: idx('Workout Notes'), rpe: idx('RPE'),
+    };
+    const sessByKey = new Map();
+    const order = [];
+
+    function num(v) { const x = parseFloat(v || '0'); return isFinite(x) ? x : 0; }
+
+    for (let r = 1; r < rows.length; r++) {
+      const cols = parseCSVLine(rows[r]);
+      if (!cols[I.date]) continue;
+      const dateIso = cols[I.date].slice(0, 10);
+      const time = cols[I.date].length > 10 ? cols[I.date].slice(11) : null;
+      const wname = cols[I.wname] || '';
+      const key = dateIso + '|' + wname;
+      let sess = sessByKey.get(key);
+      if (!sess) {
+        const dow = (() => {
+          try { return new Date(dateIso + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' }); }
+          catch (e) { return ''; }
+        })();
+        sess = {
+          date: dateIso, day_of_week: dow, time, duration: cols[I.dur] || null,
+          template: wname || null, exercises: [], share_link: null, notes: [],
+          _exIdx: {},
+        };
+        const wn = (cols[I.wn] || '').trim();
+        if (wn) sess.notes.push(wn);
+        sessByKey.set(key, sess);
+        order.push(sess);
+      }
+      const exFull = (cols[I.ex] || '').trim();
+      const m = exFull.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      const exName = m ? m[1].trim() : exFull;
+      const equip = m ? m[2].trim() : 'Bodyweight';
+      let ex = sess._exIdx[exName];
+      if (!ex) {
+        ex = {
+          name: exName, equipment: equip, muscle_group: muscleFor(exName),
+          sets: [], notes: [],
+        };
+        sess._exIdx[exName] = ex;
+        sess.exercises.push(ex);
+      }
+      const note = (cols[I.n] || '').trim();
+      if (note && !ex.notes.includes(note)) ex.notes.push(note);
+
+      const w = num(cols[I.w]);
+      const reps = parseInt(num(cols[I.r])) || 0;
+      const dist = num(cols[I.d]);
+      const secs = num(cols[I.s]);
+      const setN = parseInt(num(cols[I.so])) || (ex.sets.length + 1);
+      const rpeVal = cols[I.rpe] ? parseFloat(cols[I.rpe]) : null;
+
+      if (dist > 0 || (w === 0 && reps === 0 && secs > 0)) {
+        ex.sets.push({ set: setN, type: 'cardio', distance_mi: dist, duration_s: secs, warmup: false });
+      } else if (w > 0) {
+        ex.sets.push({
+          set: setN, type: 'weighted', weight: w, reps,
+          rpe: rpeVal, e1rm: +epleyJS(w, reps).toFixed(1),
+          volume: +(w * reps).toFixed(1), warmup: false,
+        });
+      } else if (reps > 0) {
+        ex.sets.push({ set: setN, type: 'bodyweight', reps, e1rm: null, volume: reps, warmup: false });
+      }
+    }
+    // Strip helper indexes, drop empty notes arrays, drop empty sessions
+    const out = order
+      .filter((s) => s.exercises.some((e) => e.sets.length))
+      .map((s) => {
+        delete s._exIdx;
+        if (!s.notes.length) delete s.notes;
+        s.exercises.forEach((e) => { if (!e.notes.length) delete e.notes; });
+        return s;
+      });
+    out.sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
+    return { sessions: out };
+  }
+
+  function detectFormat(text) {
+    for (const raw of text.split(/\r?\n/)) {
+      const s = raw.trim();
+      if (!s) continue;
+      if (s.startsWith('Date,Workout Name') || s.startsWith('"Date","Workout Name"')) return 'csv';
+      return 'markdown';
+    }
+    return 'markdown';
+  }
+
+  // Top-level dispatcher used by the import flow
+  function parseWorkouts(text) {
+    return detectFormat(text) === 'csv' ? parseStrongCSV(text) : parseMarkdown(text);
+  }
+
   function parseMarkdown(text) {
     const lines = text.split(/\r?\n/).map((l) =>
       l.replace(/\\\+/g, '+').replace(/\\-/g, '-').trimEnd()

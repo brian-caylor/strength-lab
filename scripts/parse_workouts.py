@@ -1,20 +1,17 @@
 """
-Parse Strong-app-style workout history exported from Google Docs (.md).
+Parse Strong app workout history into structured JSON.
 
-Output: structured JSON with sessions -> exercises -> sets, plus an exercise
-catalog with muscle-group mappings.
+Two input formats supported:
+  - Strong CSV export (the official, primary format)
+  - Markdown — Strong sets copied into a Google Doc and exported (.md/.txt)
 
-Robust against:
-  - Markdown trailing two-space line breaks
-  - Backslash-escaped chars (\+, \-)
-  - Workout *program* labels like "Monday Upper A (Strength Focus)" that
-    look superficially like exercises
-  - Mixed set formats: weighted, weighted+RPE, cardio (mi | mm:ss), bodyweight reps
-  - Notes lines, share-link URLs
+Auto-detects format by sniffing the header. Both produce the same JSON
+shape so downstream code is format-agnostic.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 import sys
@@ -164,8 +161,137 @@ def epley_e1rm(weight: float, reps: int) -> float:
     return round(weight * (1 + reps / 30.0), 1)
 
 
-def parse(md_path: Path) -> dict:
-    raw = md_path.read_text(encoding="utf-8").splitlines()
+DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def parse_csv_text(text: str) -> dict:
+    """Parse the official Strong CSV export.
+
+    Columns (Strong's standard schema):
+        Date, Workout Name, Duration, Exercise Name, Set Order,
+        Weight, Reps, Distance, Seconds, Notes, Workout Notes, RPE
+    """
+    reader = csv.DictReader(text.splitlines())
+    sessions: list[dict] = []
+    by_session: dict[tuple, dict] = {}
+
+    for row in reader:
+        date_iso = row["Date"][:10]
+        try:
+            dow = datetime.fromisoformat(date_iso).strftime("%A")
+        except ValueError:
+            dow = ""
+        time_str = row["Date"][11:] if len(row["Date"]) > 10 else None
+        wkey = (date_iso, row.get("Workout Name", "") or "")
+
+        if wkey not in by_session:
+            by_session[wkey] = {
+                "date": date_iso,
+                "day_of_week": dow,
+                "time": time_str,
+                "duration": row.get("Duration") or None,
+                "template": row.get("Workout Name") or None,
+                "exercises": [],
+                "share_link": None,
+                "_ex_index": {},  # name → exercise dict (for grouping)
+                "notes": [],
+            }
+            wn = (row.get("Workout Notes") or "").strip()
+            if wn:
+                by_session[wkey]["notes"].append(wn)
+
+        sess = by_session[wkey]
+
+        ex_name_full = row.get("Exercise Name", "").strip()
+        # Split "Bicep Curl (Machine)" → name + equipment
+        m = re.match(r"^(?P<name>.+?)\s*\((?P<equip>[^)]+)\)\s*$", ex_name_full)
+        if m:
+            ex_name = m.group("name").strip()
+            equip = m.group("equip").strip()
+        else:
+            ex_name = ex_name_full
+            equip = "Bodyweight"
+
+        if ex_name not in sess["_ex_index"]:
+            ex = {
+                "name": ex_name,
+                "equipment": equip,
+                "muscle_group": muscle_for(ex_name),
+                "sets": [],
+                "notes": [],
+            }
+            sess["_ex_index"][ex_name] = ex
+            sess["exercises"].append(ex)
+        ex = sess["_ex_index"][ex_name]
+
+        # Per-set notes appear on the first row of an exercise; attach to exercise
+        n = (row.get("Notes") or "").strip()
+        if n and n not in ex["notes"]:
+            ex["notes"].append(n)
+
+        # Determine set type
+        def _f(key: str) -> float:
+            v = row.get(key) or "0"
+            try:
+                return float(v)
+            except ValueError:
+                return 0.0
+
+        weight = _f("Weight")
+        reps = int(_f("Reps"))
+        distance = _f("Distance")
+        seconds = _f("Seconds")
+        rpe = row.get("RPE") or None
+        try:
+            set_n = int(_f("Set Order")) or len(ex["sets"]) + 1
+        except ValueError:
+            set_n = len(ex["sets"]) + 1
+
+        if distance > 0 or (weight == 0 and reps == 0 and seconds > 0):
+            ex["sets"].append({
+                "set": set_n,
+                "type": "cardio",
+                "distance_mi": distance,
+                "duration_s": int(seconds),
+                "warmup": False,
+            })
+        elif weight > 0:
+            ex["sets"].append({
+                "set": set_n,
+                "type": "weighted",
+                "weight": weight,
+                "reps": reps,
+                "rpe": float(rpe) if rpe else None,
+                "e1rm": epley_e1rm(weight, reps),
+                "volume": round(weight * reps, 1),
+                "warmup": False,
+            })
+        elif reps > 0:
+            ex["sets"].append({
+                "set": set_n,
+                "type": "bodyweight",
+                "reps": reps,
+                "e1rm": None,
+                "volume": reps,
+                "warmup": False,
+            })
+
+    # Materialize: drop the helper index, drop empty sessions
+    for sess in by_session.values():
+        sess.pop("_ex_index", None)
+        if not sess["notes"]:
+            sess.pop("notes", None)
+        for ex in sess["exercises"]:
+            if not ex.get("notes"):
+                ex.pop("notes", None)
+
+    sessions = [s for s in by_session.values() if any(e["sets"] for e in s["exercises"])]
+    sessions.sort(key=lambda s: (s["date"], s.get("time") or ""))
+    return {"sessions": sessions, "muscle_map": MUSCLE_MAP}
+
+
+def parse_markdown_text(text: str) -> dict:
+    raw = text.splitlines()
     lines = [clean_line(l) for l in raw]
 
     sessions: list[dict] = []
@@ -351,12 +477,36 @@ def parse(md_path: Path) -> dict:
     return {"sessions": sessions, "muscle_map": MUSCLE_MAP}
 
 
+def detect_format(text: str) -> str:
+    """Return 'csv' or 'markdown' based on the first non-empty line."""
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        # Strong's CSV header is stable across exports
+        if s.startswith("Date,Workout Name") or s.startswith('"Date","Workout Name"'):
+            return "csv"
+        return "markdown"
+    return "markdown"
+
+
+def parse(in_path: Path) -> dict:
+    """Auto-detect and parse a Strong CSV or markdown workout history file."""
+    text = in_path.read_text(encoding="utf-8")
+    fmt = detect_format(text)
+    if fmt == "csv":
+        return parse_csv_text(text)
+    return parse_markdown_text(text)
+
+
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: parse_workouts.py <input.md> <output.json>", file=sys.stderr)
+        print("usage: parse_workouts.py <input.csv|.md> <output.json>", file=sys.stderr)
         return 2
     in_path = Path(sys.argv[1])
     out_path = Path(sys.argv[2])
+    fmt = detect_format(in_path.read_text(encoding="utf-8"))
+    print(f"detected format: {fmt}")
     data = parse(in_path)
     out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 

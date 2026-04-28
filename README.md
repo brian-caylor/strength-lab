@@ -1,8 +1,9 @@
 # Strength Lab
 
 A private dashboard for your [Strong app](https://www.strong.app) training history.
-Drop in a markdown export, get progression charts, PR detection, weekly volume,
-and 3 / 6 / 12-month forecasts grounded in physiology.
+Drop in a CSV export (or a markdown export, if you've been pasting into a Google Doc) —
+get progression charts, PR detection, weekly volume, and 3 / 6 / 12-month forecasts
+grounded in physiology.
 
 > **Privacy first.** Your data never leaves your browser. No accounts, no
 > cookies, no servers. Refresh the page and it's gone.
@@ -135,27 +136,30 @@ The simplest path:
 
 ## Importing your Strong app history
 
-The dashboard expects markdown of the form Strong app exports produce when
-piped through Google Docs:
+### Primary: Strong CSV export
+
+Open the Strong app → **Settings → Export Data → CSV**. Drop the resulting
+`strong.csv` file into the dashboard's drop zone. The expected schema
+(stable across recent Strong versions):
 
 ```
-Monday
-Monday, April 27, 2026 at 5:37 AM
-
-Shoulder Press (Machine)
-Set 1: 80 lb × 10
-Set 2: 80 lb × 10
-Set 3: 80 lb × 10
-
-Notes: optional notes here
-
-Chest Press (Machine)
-Set 1: 140 lb × 8
-...
-https://link.strong.app/...
+Date, Workout Name, Duration, Exercise Name, Set Order,
+Weight, Reps, Distance, Seconds, Notes, Workout Notes, RPE
 ```
 
-It also handles:
+One row per set. The parser groups rows by `(Date, Workout Name)` into
+sessions, splits `Exercise Name` into name + equipment (e.g.
+`Bicep Curl (Machine)` → `Bicep Curl` / `Machine`), and classifies each
+set as **weighted**, **cardio** (when `Distance > 0`), or **bodyweight**
+(when `Reps > 0` and `Weight = 0`).
+
+### Supporting: markdown export
+
+If you've been pasting Strong sets into a Google Doc and exporting as
+`.md`, that still works. Format detection is automatic — you don't need
+to tell the dashboard which one you're dropping in.
+
+The markdown parser handles:
 
 - Cardio sets (`Set 1: 1.8 mi | 0:25`)
 - Bodyweight sets (`Set 1: 16 reps`)
