@@ -30,6 +30,8 @@ demo, or drop in your own Strong-app `.md` export.
   logarithmic curve to your per-session best e1RM, classifies your training
   age on that movement, and applies diminishing-returns multipliers.
 - **Import** — drag-drop a file, paste markdown, or load the sample.
+- **Trainer handoff** — generate a self-contained historical archive with your
+  data baked in, plus a print/PDF summary for reference.
 
 ## How it works
 
@@ -116,10 +118,28 @@ python3 build.py
 # Personal build with your own data baked in
 python3 scripts/parse_workouts.py "your-export.md" workouts.json
 python3 build.py --with-data workouts.json
+
+# One-step trainer handoff from a Strong CSV or markdown export
+python3 build.py --from-export "your-export.md" --trainer-export --out trainer-dashboard.html
 ```
 
-A personal build saves to `index.html` (overwrites the public one) — easy to
-revert with `git checkout`.
+A personal build saves to `index.html` unless you pass `--out`. The public
+build is easy to restore with `python3 build.py` or `git checkout -- index.html`.
+
+## Trainer handoff export
+
+For a coach or personal trainer who only needs historical data, use the trainer
+export build:
+
+```bash
+python3 build.py --from-export "strong.csv" --trainer-export --out trainer-dashboard.html
+```
+
+The resulting HTML file is a static archive: data, dashboard code, styles, and
+Chart.js are bundled into the file so chart interactivity does not depend on a
+CDN. Send the file directly, zip it, or host it at an unlisted Netlify URL. The
+Overview includes a **Print / Save PDF** button that creates a static reference
+report; the browser dashboard remains the interactive version.
 
 ## Deploying to Netlify
 

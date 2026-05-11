@@ -11,8 +11,8 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "interest-cohort=(), camera=(), microphone=(), geolocation=()"
-    # Allow Chart.js + Google Fonts; everything else inline or self-hosted.
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'"
+    # Dashboard code, data, and Chart.js are inlined into the generated HTML.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'"
 
 # Long-cache the bundled HTML — its content hash changes only on rebuild.
 [[headers]]

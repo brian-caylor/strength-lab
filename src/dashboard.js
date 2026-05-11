@@ -7,29 +7,42 @@
 
   // ---------- Data load ----------
   let DATA = JSON.parse(document.getElementById('workout-data').textContent);
+  const CONFIG_NODE = document.getElementById('app-config');
+  const APP_CONFIG = CONFIG_NODE ? JSON.parse(CONFIG_NODE.textContent) : {};
   let SESSIONS = []; // sorted ascending by date
-  let EXERCISE_INDEX = {}; // name -> { name, equipment_options[], muscle_group, instances: [{date, sets, sessionIdx}] }
+  let EXERCISE_INDEX = {}; // name+equipment key -> { key, name, equipment_options[], muscle_group, instances: [...] }
 
   // Sample markdown data for the "Try with sample data" button. Inlined at build time.
   const SAMPLE_MD_NODE = document.getElementById('sample-md');
   const SAMPLE_MD = SAMPLE_MD_NODE ? SAMPLE_MD_NODE.textContent : '';
   function hasData() { return SESSIONS && SESSIONS.length > 0; }
+  function exerciseKey(ex) {
+    return `${ex.name || 'Unknown'}|${ex.equipment || '—'}`;
+  }
+  function exerciseLabel(ex) {
+    const equip = ex.equipment_options && ex.equipment_options.length === 1
+      ? ex.equipment_options[0]
+      : (ex.equipment || '');
+    return equip && equip !== '—' ? `${ex.name} (${equip})` : ex.name;
+  }
 
   function indexData() {
     SESSIONS = (DATA.sessions || []).slice().sort((a, b) => a.date.localeCompare(b.date));
     EXERCISE_INDEX = {};
     SESSIONS.forEach((s, sidx) => {
       s.exercises.forEach((ex) => {
-        if (!EXERCISE_INDEX[ex.name]) {
-          EXERCISE_INDEX[ex.name] = {
+        const key = exerciseKey(ex);
+        if (!EXERCISE_INDEX[key]) {
+          EXERCISE_INDEX[key] = {
+            key,
             name: ex.name,
             muscle_group: ex.muscle_group,
             equipment_options: new Set(),
             instances: [],
           };
         }
-        EXERCISE_INDEX[ex.name].equipment_options.add(ex.equipment || '—');
-        EXERCISE_INDEX[ex.name].instances.push({
+        EXERCISE_INDEX[key].equipment_options.add(ex.equipment || '—');
+        EXERCISE_INDEX[key].instances.push({
           date: s.date,
           sessionIdx: sidx,
           sets: ex.sets,
@@ -90,6 +103,9 @@
       day: 'numeric',
     });
   }
+  function referenceDateISO() {
+    return SESSIONS.length ? SESSIONS[SESSIONS.length - 1].date : new Date().toISOString().slice(0, 10);
+  }
 
   // ---------- Aggregations ----------
   function totalVolume(sets) {
@@ -128,7 +144,7 @@
     return m;
   }
   function withinDays(dateISO, days) {
-    const today = new Date(); today.setHours(0,0,0,0);
+    const today = new Date(referenceDateISO() + 'T00:00:00'); today.setHours(0,0,0,0);
     const d = new Date(dateISO + 'T00:00:00');
     return (today - d) / 86400000 <= days;
   }
@@ -146,11 +162,11 @@
           if (set.type !== 'weighted') continue;
           if (set.warmup) continue;
           if (set.e1rm > bestE + 0.01) {
-            prs.push({ date: inst.date, exercise: ex.name, type: 'e1RM', value: set.e1rm, set });
+            prs.push({ date: inst.date, exerciseKey: ex.key, exercise: exerciseLabel(ex), type: 'e1RM', value: set.e1rm, set });
             bestE = set.e1rm;
           }
           if (set.weight > bestW + 0.01) {
-            prs.push({ date: inst.date, exercise: ex.name, type: 'top weight', value: set.weight, set });
+            prs.push({ date: inst.date, exerciseKey: ex.key, exercise: exerciseLabel(ex), type: 'top weight', value: set.weight, set });
             bestW = set.weight;
           }
           const prev = repsAtWeight[set.weight] || 0;
@@ -207,8 +223,8 @@
     return { label: 'Advanced', factor: 0.55 };
   }
 
-  function forecastExercise(name) {
-    const ex = EXERCISE_INDEX[name];
+  function forecastExercise(key) {
+    const ex = EXERCISE_INDEX[key];
     if (!ex) return null;
     // Best e1RM per session, in chronological order
     const points = [];
@@ -466,6 +482,147 @@
     }
   }
 
+  function trainerIntroHTML(firstDate, lastDate, totalSessions, totalSets, totalVol) {
+    if (!APP_CONFIG.trainer_export) return '';
+    const generated = APP_CONFIG.generated_at
+      ? new Date(APP_CONFIG.generated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      : null;
+    return `
+      <div class="trainer-intro">
+        <div>
+          <div class="eyebrow">Trainer handoff</div>
+          <h2>Historical training archive</h2>
+          <p>
+            This dashboard is a static snapshot of historical Strong-app data from
+            <strong>${pretty(firstDate)}</strong> through <strong>${pretty(lastDate)}</strong>.
+            Future live coaching data is tracked in Caliber Strong.
+          </p>
+          <div class="trainer-meta">
+            <span>${fmt(totalSessions)} sessions</span>
+            <span>${fmt(totalSets)} sets</span>
+            <span>${fmt(totalVol)} lb lifted</span>
+            ${APP_CONFIG.source_name ? `<span>Source: ${escapeHTML(APP_CONFIG.source_name)}</span>` : ''}
+            ${generated ? `<span>Generated: ${generated}</span>` : ''}
+          </div>
+        </div>
+        <button class="btn" id="print-summary">Print / Save PDF</button>
+      </div>
+    `;
+  }
+
+  function printReportHTML({ firstDate, lastDate, totalSessions, totalSets, totalVol, weekMap, weeks }) {
+    if (!APP_CONFIG.trainer_export) return '';
+    const exercises = Object.values(EXERCISE_INDEX).slice().sort((a, b) => b.instances.length - a.instances.length);
+    const weeklyRows = weeks.slice(-16).map((w) => `
+      <tr><td>${shortDate(w)}</td><td>${fmt(weekMap[w] || 0)} lb</td></tr>
+    `).join('');
+    const exerciseRows = exercises.map((ex) => {
+      const e1rms = ex.instances.map((inst) => bestE1rm(inst.sets)).filter((x) => x > 0);
+      const last = e1rms[e1rms.length - 1] || 0;
+      const first = e1rms[0] || 0;
+      const delta = first > 0 ? ((last - first) / first) * 100 : 0;
+      const top = ex.instances
+        .flatMap((i) => i.sets)
+        .filter((s) => s.type === 'weighted' && !s.warmup)
+        .reduce((best, s) => (!best || s.e1rm > best.e1rm ? s : best), null);
+      return `
+        <tr>
+          <td>${escapeHTML(exerciseLabel(ex))}</td>
+          <td>${ex.instances.length}</td>
+          <td>${top ? `${fmt(top.weight)} x ${top.reps}` : '—'}</td>
+          <td>${last ? fmt(last, 1) + ' lb' : '—'}</td>
+          <td>${first ? `${delta >= 0 ? '+' : ''}${fmt(delta, 1)}%` : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+    const forecastRows = exercises
+      .filter((ex) => ex.instances.length >= 4)
+      .slice(0, 6)
+      .map((ex) => {
+        const fc = forecastExercise(ex.key);
+        if (!fc || !fc.projections) return '';
+        const p3 = fc.projections[0];
+        const p6 = fc.projections[1];
+        const p12 = fc.projections[2];
+        return `
+          <tr>
+            <td>${escapeHTML(exerciseLabel(ex))}</td>
+            <td>${fmt(fc.lastY, 1)} lb</td>
+            <td>${fmt(p3.realistic, 1)} lb</td>
+            <td>${fmt(p6.realistic, 1)} lb</td>
+            <td>${fmt(p12.realistic, 1)} lb</td>
+          </tr>
+        `;
+      }).join('');
+    const historyRows = SESSIONS.slice().reverse().map((s) => {
+      const volume = s.exercises.reduce((a, ex) => a + totalVolume(ex.sets), 0);
+      const names = s.exercises.map((ex) => `${ex.name}${ex.equipment ? ` (${ex.equipment})` : ''}`).join(', ');
+      return `
+        <tr>
+          <td>${pretty(s.date)}</td>
+          <td>${s.exercises.length}</td>
+          <td>${fmt(volume)} lb</td>
+          <td>${escapeHTML(names)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <article class="print-report">
+        <h1>Strength Lab Historical Training Archive</h1>
+        <p class="print-sub">
+          ${pretty(firstDate)} through ${pretty(lastDate)}. Static historical handoff only;
+          future live coaching data is tracked in Caliber Strong.
+        </p>
+        <nav class="print-toc">
+          <a href="#print-overview">Overview</a>
+          <a href="#print-weekly-volume">Weekly volume</a>
+          <a href="#print-exercises">Exercise summary</a>
+          <a href="#print-forecasts">Forecasts</a>
+          <a href="#print-history">Session appendix</a>
+        </nav>
+
+        <section id="print-overview">
+          <h2>Overview</h2>
+          <div class="print-kpis">
+            <div><strong>${fmt(totalSessions)}</strong><span>Sessions</span></div>
+            <div><strong>${fmt(totalSets)}</strong><span>Sets</span></div>
+            <div><strong>${fmt(totalVol)}</strong><span>Total lb lifted</span></div>
+          </div>
+        </section>
+
+        <section id="print-weekly-volume">
+          <h2>Weekly Volume</h2>
+          <table><thead><tr><th>Week</th><th>Volume</th></tr></thead><tbody>${weeklyRows}</tbody></table>
+        </section>
+
+        <section id="print-exercises">
+          <h2>Exercise Summary</h2>
+          <table>
+            <thead><tr><th>Exercise</th><th>Sessions</th><th>Top set</th><th>Best e1RM</th><th>Change</th></tr></thead>
+            <tbody>${exerciseRows}</tbody>
+          </table>
+        </section>
+
+        <section id="print-forecasts">
+          <h2>Selected Forecasts</h2>
+          <table>
+            <thead><tr><th>Exercise</th><th>Current</th><th>3 months</th><th>6 months</th><th>12 months</th></tr></thead>
+            <tbody>${forecastRows}</tbody>
+          </table>
+        </section>
+
+        <section id="print-history">
+          <h2>Session Appendix</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Exercises</th><th>Volume</th><th>Movements</th></tr></thead>
+            <tbody>${historyRows}</tbody>
+          </table>
+        </section>
+      </article>
+    `;
+  }
+
   // ---------- View: Overview ----------
   function renderOverview() {
     const totalSessions = SESSIONS.length;
@@ -490,6 +647,7 @@
       (a, s) => a + s.exercises.reduce((b, ex) => b + totalVolume(ex.sets), 0), 0
     );
     const muscle30 = setsByMuscle(recent);
+    const recentLabel = `30d ending ${shortDate(lastDate)}`;
 
     // Streak: longest gap of <=4 days in a row → consecutive workout streak
     let streak = 0, longestStreak = 0;
@@ -516,76 +674,80 @@
     const recentWeeks = weeks.slice(-16);
 
     app.innerHTML = `
-      <div class="section-head">
-        <h1>Overview</h1>
-        <span class="sub">${pretty(firstDate)} → ${pretty(lastDate)} · ${fmt(totalDays)} days of training data</span>
-      </div>
+      <div class="dashboard-screen">
+        ${trainerIntroHTML(firstDate, lastDate, totalSessions, totalSets, totalVol)}
+        <div class="section-head">
+          <h1>Overview</h1>
+          <span class="sub">${pretty(firstDate)} → ${pretty(lastDate)} · ${fmt(totalDays)} days of training data</span>
+        </div>
 
-      <div class="grid cols-4" style="margin-bottom:18px;">
-        <div class="panel kpi kpi-accent">
-          <div class="label">Total sessions</div>
-          <div class="value">${fmt(totalSessions)}</div>
-          <div class="delta">${sessionsPerWeek} / week avg</div>
+        <div class="grid cols-4" style="margin-bottom:18px;">
+          <div class="panel kpi kpi-accent">
+            <div class="label">Total sessions</div>
+            <div class="value">${fmt(totalSessions)}</div>
+            <div class="delta">${sessionsPerWeek} / week avg</div>
+          </div>
+          <div class="panel kpi">
+            <div class="label">Total volume lifted</div>
+            <div class="value">${fmt(totalVol)}<span class="unit">lb</span></div>
+            <div class="delta">${recentLabel}: ${fmt(recentVol)} lb</div>
+          </div>
+          <div class="panel kpi">
+            <div class="label">Working sets logged</div>
+            <div class="value">${fmt(totalSets)}</div>
+            <div class="delta">${fmt(totalSets / totalSessions, 1)} per session</div>
+          </div>
+          <div class="panel kpi">
+            <div class="label">Longest streak</div>
+            <div class="value">${longestStreak}</div>
+            <div class="delta">consecutive workouts (≤4d apart)</div>
+          </div>
         </div>
-        <div class="panel kpi">
-          <div class="label">Total volume lifted</div>
-          <div class="value">${fmt(totalVol)}<span class="unit">lb</span></div>
-          <div class="delta">last 30d: ${fmt(recentVol)} lb</div>
-        </div>
-        <div class="panel kpi">
-          <div class="label">Working sets logged</div>
-          <div class="value">${fmt(totalSets)}</div>
-          <div class="delta">${fmt(totalSets / totalSessions, 1)} per session</div>
-        </div>
-        <div class="panel kpi">
-          <div class="label">Longest streak</div>
-          <div class="value">${longestStreak}</div>
-          <div class="delta">consecutive workouts (≤4d apart)</div>
-        </div>
-      </div>
 
-      <div class="grid cols-2" style="margin-bottom:18px;">
-        <div class="panel">
-          <h2>Weekly volume — last 16 weeks</h2>
-          <div class="chart-wrap"><canvas id="chart-vol"></canvas></div>
+        <div class="grid cols-2" style="margin-bottom:18px;">
+          <div class="panel">
+            <h2>Weekly volume — last 16 weeks</h2>
+            <div class="chart-wrap"><canvas id="chart-vol"></canvas></div>
+          </div>
+          <div class="panel">
+            <h2>Sets per muscle group — ${recentLabel}</h2>
+            <div class="chart-wrap"><canvas id="chart-muscle"></canvas></div>
+          </div>
         </div>
-        <div class="panel">
-          <h2>Sets per muscle group — last 30 days</h2>
-          <div class="chart-wrap"><canvas id="chart-muscle"></canvas></div>
-        </div>
-      </div>
 
-      <div class="grid cols-2" style="margin-bottom:18px;">
-        <div class="panel">
-          <h2>Recent PRs (last 30 days)</h2>
-          ${recentPRs.length === 0
-            ? '<div class="empty" style="padding:14px;">No PRs in the last 30 days. Plateaus build the foundation for breakthroughs.</div>'
-            : `<div class="ex-list">${recentPRs
-                .map(
-                  (p) => `
-                <div class="ex-row" data-jump="${p.exercise}">
-                  <div class="ex-row-name">
-                    ${p.exercise}
-                    <span class="sub">${pretty(p.date)}</span>
-                  </div>
-                  <div><div class="stat-label">Type</div><div class="stat-value">${p.type}</div></div>
-                  <div><div class="stat-label">Value</div><div class="stat-value">${
-                    p.type === 'e1RM' ? fmt(p.value, 1) + ' lb' : fmt(p.value) + ' lb'
-                  }</div></div>
-                  <div><div class="stat-label">Set</div><div class="stat-value">${
-                    p.set ? `${fmt(p.set.weight)}×${p.set.reps}` : '—'
-                  }</div></div>
-                  <div class="trend up">↑ NEW</div>
-                </div>`
-                )
-                .join('')}</div>`
-          }
-        </div>
-        <div class="panel">
-          <h2>Activity — last 365 days</h2>
-          <div id="heatmap-host"></div>
+        <div class="grid cols-2" style="margin-bottom:18px;">
+          <div class="panel">
+            <h2>Recent PRs (${recentLabel})</h2>
+            ${recentPRs.length === 0
+              ? `<div class="empty" style="padding:14px;">No PRs in the ${recentLabel}. Plateaus build the foundation for breakthroughs.</div>`
+              : `<div class="ex-list">${recentPRs
+                  .map(
+                    (p) => `
+                  <div class="ex-row" data-jump="${escapeHTML(p.exerciseKey)}">
+                    <div class="ex-row-name">
+                      ${escapeHTML(p.exercise)}
+                      <span class="sub">${pretty(p.date)}</span>
+                    </div>
+                    <div><div class="stat-label">Type</div><div class="stat-value">${p.type}</div></div>
+                    <div><div class="stat-label">Value</div><div class="stat-value">${
+                      p.type === 'e1RM' ? fmt(p.value, 1) + ' lb' : fmt(p.value) + ' lb'
+                    }</div></div>
+                    <div><div class="stat-label">Set</div><div class="stat-value">${
+                      p.set ? `${fmt(p.set.weight)}×${p.set.reps}` : '—'
+                    }</div></div>
+                    <div class="trend up">↑ NEW</div>
+                  </div>`
+                  )
+                  .join('')}</div>`
+            }
+          </div>
+          <div class="panel">
+            <h2>Activity — 365 days ending ${shortDate(lastDate)}</h2>
+            <div id="heatmap-host"></div>
+          </div>
         </div>
       </div>
+      ${printReportHTML({ firstDate, lastDate, totalSessions, totalSets, totalVol, weekMap, weeks })}
     `;
 
     // Volume chart
@@ -632,6 +794,8 @@
     app.querySelectorAll('.ex-row[data-jump]').forEach((el) => {
       el.addEventListener('click', () => go('exercise', { name: el.dataset.jump }));
     });
+    const printBtn = document.getElementById('print-summary');
+    if (printBtn) printBtn.addEventListener('click', () => window.print());
   }
 
   function muscleColor(name) {
@@ -646,7 +810,7 @@
 
   function renderHeatmap(host) {
     if (!SESSIONS.length) return;
-    const today = new Date(); today.setHours(0,0,0,0);
+    const today = new Date(referenceDateISO() + 'T00:00:00'); today.setHours(0,0,0,0);
     const days = 365;
     const start = new Date(today); start.setDate(start.getDate() - (days - 1));
     // Adjust start to Monday
@@ -749,7 +913,7 @@
       list.innerHTML = '<div class="empty">No sessions match those filters.</div>';
     } else {
       const allPRs = detectPRs();
-      const prKey = (p) => `${p.date}|${p.exercise}|${p.type}`;
+      const prKey = (p) => `${p.date}|${p.exerciseKey}|${p.type}`;
       const prSet = new Set(allPRs.map(prKey));
 
       list.innerHTML = filtered.map((s) => sessionCardHTML(s, prSet)).join('');
@@ -793,7 +957,7 @@
         </div>
         <div class="session-body">
           ${s.exercises.map((ex) => {
-            const isPR = prSet && prSet.has(`${s.date}|${ex.name}|e1RM`);
+            const isPR = prSet && prSet.has(`${s.date}|${exerciseKey(ex)}|e1RM`);
             return `
               <div class="exercise-block">
                 <div class="exercise-name">
@@ -850,7 +1014,7 @@
         .reduce((best, s) => (!best || s.e1rm > best.e1rm ? s : best), null);
 
       return `
-        <div class="ex-row" data-name="${escapeHTML(ex.name)}">
+        <div class="ex-row" data-name="${escapeHTML(ex.key)}">
           <div class="ex-row-name">
             ${escapeHTML(ex.name)}
             <span class="sub">${ex.equipment_options.join(' · ')} · ${ex.muscle_group}</span>
@@ -875,7 +1039,7 @@
     app.innerHTML = `
       <div class="section-head">
         <h1>Exercises</h1>
-        <span class="sub">${exs.length} unique exercises</span>
+        <span class="sub">${exs.length} unique exercise variants</span>
       </div>
       <div class="ex-list">${rows}</div>
     `;
@@ -964,7 +1128,7 @@
       go('exercises');
     });
     document.getElementById('forecast-jump').addEventListener('click', () => {
-      go('forecast', { name });
+      go('forecast', { name: ex.key });
     });
 
     const opts = chartOpts({ y: 'lb' });
@@ -1022,7 +1186,7 @@
     const exs = Object.values(EXERCISE_INDEX)
       .filter((e) => e.instances.some((i) => bestE1rm(i.sets) > 0))
       .sort((a, b) => b.instances.length - a.instances.length);
-    if (!name) name = exs[0] ? exs[0].name : null;
+    if (!name) name = exs[0] ? exs[0].key : null;
 
     app.innerHTML = `
       <div class="section-head">
@@ -1041,7 +1205,7 @@
 
       <div class="toolbar">
         <select id="fselect" style="min-width: 260px;">
-          ${exs.map((e) => `<option value="${escapeHTML(e.name)}" ${e.name === name ? 'selected' : ''}>${escapeHTML(e.name)} · ${e.instances.length} sessions</option>`).join('')}
+          ${exs.map((e) => `<option value="${escapeHTML(e.key)}" ${e.key === name ? 'selected' : ''}>${escapeHTML(exerciseLabel(e))} · ${e.instances.length} sessions</option>`).join('')}
         </select>
       </div>
 
@@ -1064,6 +1228,8 @@
       return;
     }
     const { points, fit, trainingAge, lastY, sigma, projections } = fc;
+    const ex = EXERCISE_INDEX[name];
+    const label = ex ? exerciseLabel(ex) : name;
 
     // Build dataset: historical points + future projection curve
     const histLabels = points.map((p) => p.date);
@@ -1111,7 +1277,7 @@
       </div>
 
       <div class="panel">
-        <h2>${escapeHTML(name)} — historical vs. projected e1RM</h2>
+        <h2>${escapeHTML(label)} — historical vs. projected e1RM</h2>
         <div class="chart-wrap tall"><canvas id="fchart"></canvas></div>
       </div>
 
