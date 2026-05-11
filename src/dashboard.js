@@ -444,7 +444,7 @@
 
         <div class="welcome-foot">
           How to export from Strong: open the app → <strong>Settings → Export Data → CSV</strong>. Drop the
-          resulting <code>strong.csv</code> here. Markdown exports (or sets pasted into a Google Doc) also work.
+          resulting <code>strong_workouts.csv</code> here. Markdown exports (or sets pasted into a Google Doc) also work.
         </div>
       </div>
     `;
@@ -1378,7 +1378,7 @@
         </div>
         <div class="panel">
           <h2>Or paste data</h2>
-          <textarea id="paste" placeholder="Paste the contents of strong.csv here — or paste your markdown export. The format is auto-detected."></textarea>
+          <textarea id="paste" placeholder="Paste the contents of strong_workouts.csv here — or paste your markdown export. The format is auto-detected."></textarea>
           <div class="import-actions" style="justify-content:flex-start;">
             <button class="btn" id="parse-btn">${empty ? 'Load' : 'Merge'}</button>
             ${empty ? '' : '<button class="btn-ghost" id="replace-btn">Replace all</button>'}

@@ -120,7 +120,7 @@ python3 scripts/parse_workouts.py "your-export.md" workouts.json
 python3 build.py --with-data workouts.json
 
 # One-step trainer handoff from a Strong CSV or markdown export
-python3 build.py --from-export "your-export.md" --trainer-export --out trainer-dashboard.html
+python3 build.py --from-export "strong_workouts.csv" --trainer-export --out trainer-dashboard.html
 ```
 
 A personal build saves to `index.html` unless you pass `--out`. The public
@@ -132,7 +132,7 @@ For a coach or personal trainer who only needs historical data, use the trainer
 export build:
 
 ```bash
-python3 build.py --from-export "strong.csv" --trainer-export --out trainer-dashboard.html
+python3 build.py --from-export "strong_workouts.csv" --trainer-export --out trainer-dashboard.html
 ```
 
 The resulting HTML file is a static archive: data, dashboard code, styles, and
@@ -158,7 +158,7 @@ The simplest path:
 ### Primary: Strong CSV export
 
 Open the Strong app → **Settings → Export Data → CSV**. Drop the resulting
-`strong.csv` file into the dashboard's drop zone. The expected schema
+`strong_workouts.csv` file into the dashboard's drop zone. The expected schema
 (stable across recent Strong versions):
 
 ```
