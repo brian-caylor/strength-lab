@@ -10,8 +10,7 @@ grounded in physiology.
 
 ## Live demo
 
-[**strength-lab.netlify.app**](https://strength-lab.netlify.app) *(replace
-with your real URL once deployed)*
+[**strength-lab.netlify.app**](https://strength-lab.netlify.app) 
 
 The live site ships empty. Click **Try with sample data** for a 32-session
 demo, or drop in your own Strong-app `.md` export.
