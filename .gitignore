@@ -1,6 +1,7 @@
 # Personal builds — keep your training data out of git
 workouts.json
 strong_workouts.csv
+trainer-dashboard.html
 "Workout Dashboard.html"
 *.local.html
 

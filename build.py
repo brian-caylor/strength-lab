@@ -9,7 +9,7 @@ Usage:
   python3 build.py                       # public build (empty data + sample)
   python3 build.py --with-data X         # bake in X (a workouts.json)
   python3 build.py --from-export X       # parse Strong CSV/Markdown, then bake it in
-  python3 build.py --from-export X --trainer-export --out trainer-dashboard.html
+  python3 build.py --trainer-export --out trainer-dashboard.html
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ JS_FILE = SRC / "dashboard.js"
 SAMPLE_MD = SRC / "sample-data.md"
 CHART_FILE = SRC / "vendor" / "chart.umd.js"
 OUT = ROOT / "index.html"
+DEFAULT_STRONG_EXPORT = ROOT / "strong_workouts.csv"
+PLACEHOLDER_EXPORT_NAMES = {"your-strong-export.csv", "your-export.csv", "your-export.md"}
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -97,23 +99,67 @@ def _resolve_out(path: Path | None) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
+def _resolve_input(path: Path) -> Path:
+    return path if path.is_absolute() else ROOT / path
+
+
 def _safe_script_text(text: str) -> str:
     """Prevent embedded data from closing the surrounding script tag."""
     return text.replace("</", "<\\/")
 
 
-def _read_data(with_data_path: Path | None, from_export_path: Path | None) -> tuple[str, str | None]:
+def _missing_export_message(requested: Path, resolved: Path) -> str:
+    lines = [
+        f"Could not find export file: {requested}",
+        f"Looked for: {resolved}",
+    ]
+    if requested.name in PLACEHOLDER_EXPORT_NAMES:
+        lines.append(f'"{requested.name}" is example placeholder text, not the default Strong export filename.')
+    if DEFAULT_STRONG_EXPORT.exists():
+        lines.extend([
+            "",
+            "Found Strong's default export file in this folder: strong_workouts.csv",
+            "Try:",
+            "  python3 build.py --trainer-export --out trainer-dashboard.html",
+            "or:",
+            "  python3 build.py --from-export strong_workouts.csv --trainer-export --out trainer-dashboard.html",
+        ])
+    else:
+        lines.extend([
+            "",
+            "Put your Strong CSV export in this folder as strong_workouts.csv, or pass the correct export path.",
+            "Example:",
+            "  python3 build.py --from-export strong_workouts.csv --trainer-export --out trainer-dashboard.html",
+        ])
+    return "\n".join(lines)
+
+
+def _read_data(
+    with_data_path: Path | None,
+    from_export_path: Path | None,
+    trainer_export: bool,
+) -> tuple[str, str | None]:
     if with_data_path and from_export_path:
         raise SystemExit("Use either --with-data or --from-export, not both.")
 
     if from_export_path:
-        data = parse(from_export_path)
-        return json.dumps(data, indent=2), from_export_path.name
+        export_path = _resolve_input(from_export_path)
+        if not export_path.exists():
+            raise SystemExit(_missing_export_message(from_export_path, export_path))
+        data = parse(export_path)
+        return json.dumps(data, indent=2), export_path.name
 
     if with_data_path:
-        data_text = with_data_path.read_text(encoding="utf-8")
+        data_path = _resolve_input(with_data_path)
+        data_text = data_path.read_text(encoding="utf-8")
         json.loads(data_text)
-        return data_text, with_data_path.name
+        return data_text, data_path.name
+
+    if trainer_export:
+        if DEFAULT_STRONG_EXPORT.exists():
+            data = parse(DEFAULT_STRONG_EXPORT)
+            return json.dumps(data, indent=2), DEFAULT_STRONG_EXPORT.name
+        raise SystemExit(_missing_export_message(Path("strong_workouts.csv"), DEFAULT_STRONG_EXPORT))
 
     return json.dumps({"sessions": [], "muscle_map": {}}), None
 
@@ -132,7 +178,7 @@ def build(
     if "</script>" in sample:
         raise SystemExit("sample-data.md contains </script>; refusing to inline.")
 
-    data, source_name = _read_data(with_data_path, from_export_path)
+    data, source_name = _read_data(with_data_path, from_export_path, trainer_export)
     config = {
         "trainer_export": trainer_export,
         "source_name": source_name,
@@ -163,8 +209,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--with-data", type=Path, default=None,
                     help="Path to a workouts.json to bake in (personal build)")
-    ap.add_argument("--from-export", type=Path, default=None,
-                    help="Path to a Strong CSV or markdown export to parse and bake in")
+    ap.add_argument("--from-export", type=Path, nargs="?", const=Path("strong_workouts.csv"), default=None,
+                    help="Path to a Strong CSV or markdown export to parse and bake in. Defaults to strong_workouts.csv when no path is provided.")
     ap.add_argument("--trainer-export", action="store_true",
                     help="Add trainer handoff context and print/PDF affordances")
     ap.add_argument("--out", type=Path, default=None,

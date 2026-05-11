@@ -29,6 +29,9 @@ demo, or drop in your own Strong-app `.md` export.
   scenarios (conservative / realistic / optimistic). The model fits a
   logarithmic curve to your per-session best e1RM, classifies your training
   age on that movement, and applies diminishing-returns multipliers.
+- **Filters & sorting** — slice the archive by date, muscle, exercise,
+  equipment, or search text, then sort history, exercise summaries, PRs, and
+  forecast pickers by the questions you are asking.
 - **Import** — drag-drop a file, paste markdown, or load the sample.
 - **Trainer handoff** — generate a self-contained historical archive with your
   data baked in, plus a print/PDF summary for reference.
@@ -119,8 +122,8 @@ python3 build.py
 python3 scripts/parse_workouts.py "your-export.md" workouts.json
 python3 build.py --with-data workouts.json
 
-# One-step trainer handoff from a Strong CSV or markdown export
-python3 build.py --from-export "strong_workouts.csv" --trainer-export --out trainer-dashboard.html
+# One-step trainer handoff using Strong's default export filename
+python3 build.py --trainer-export --out trainer-dashboard.html
 ```
 
 A personal build saves to `index.html` unless you pass `--out`. The public
@@ -132,7 +135,14 @@ For a coach or personal trainer who only needs historical data, use the trainer
 export build:
 
 ```bash
-python3 build.py --from-export "strong_workouts.csv" --trainer-export --out trainer-dashboard.html
+python3 build.py --trainer-export --out trainer-dashboard.html
+```
+
+That command automatically uses `strong_workouts.csv` when the file is in the
+project folder. You can still pass another path explicitly:
+
+```bash
+python3 build.py --from-export "path/to/export.csv" --trainer-export --out trainer-dashboard.html
 ```
 
 The resulting HTML file is a static archive: data, dashboard code, styles, and

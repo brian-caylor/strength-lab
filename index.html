@@ -180,6 +180,14 @@ main {
   font-size: 15px;
   font-weight: 600;
 }
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.panel-title-row h2 { margin-bottom: 0; }
 
 /* ---------- big number cards ---------- */
 .kpi {
@@ -353,7 +361,54 @@ main {
   display: flex; gap: 10px; flex-wrap: wrap;
   margin-bottom: 16px;
 }
-input[type="text"], input[type="search"], select, textarea {
+.filter-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+.filter-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.filter-grid .filter-search {
+  grid-column: span 2;
+}
+.filter-grid button {
+  min-height: 37px;
+}
+.filter-summary {
+  margin-top: 10px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.compact-select {
+  min-width: 120px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+@media (max-width: 1000px) {
+  .filter-grid { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+}
+@media (max-width: 640px) {
+  .filter-grid { grid-template-columns: 1fr; }
+  .filter-grid .filter-search { grid-column: auto; }
+}
+input[type="text"], input[type="search"], input[type="date"], select, textarea {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -364,8 +419,13 @@ input[type="text"], input[type="search"], select, textarea {
   outline: none;
   transition: border-color 120ms;
 }
-input[type="text"]:focus, input[type="search"]:focus, select:focus, textarea:focus {
+input[type="text"]:focus, input[type="search"]:focus, input[type="date"]:focus, select:focus, textarea:focus {
   border-color: var(--accent);
+}
+input:disabled {
+  color: var(--text-2);
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 .btn {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -1866,12 +1926,16 @@ https://link.strong.app/sample-7-fri-lower
 
   function indexData() {
     SESSIONS = (DATA.sessions || []).slice().sort((a, b) => a.date.localeCompare(b.date));
-    EXERCISE_INDEX = {};
-    SESSIONS.forEach((s, sidx) => {
+    EXERCISE_INDEX = buildExerciseIndex(SESSIONS);
+  }
+
+  function buildExerciseIndex(sessions) {
+    const index = {};
+    sessions.forEach((s, sidx) => {
       s.exercises.forEach((ex) => {
         const key = exerciseKey(ex);
-        if (!EXERCISE_INDEX[key]) {
-          EXERCISE_INDEX[key] = {
+        if (!index[key]) {
+          index[key] = {
             key,
             name: ex.name,
             muscle_group: ex.muscle_group,
@@ -1879,8 +1943,8 @@ https://link.strong.app/sample-7-fri-lower
             instances: [],
           };
         }
-        EXERCISE_INDEX[key].equipment_options.add(ex.equipment || '—');
-        EXERCISE_INDEX[key].instances.push({
+        index[key].equipment_options.add(ex.equipment || '—');
+        index[key].instances.push({
           date: s.date,
           sessionIdx: sidx,
           sets: ex.sets,
@@ -1888,11 +1952,11 @@ https://link.strong.app/sample-7-fri-lower
         });
       });
     });
-    // Convert sets to arrays for stable ordering
-    Object.values(EXERCISE_INDEX).forEach((ex) => {
+    Object.values(index).forEach((ex) => {
       ex.equipment_options = [...ex.equipment_options];
       ex.instances.sort((a, b) => a.date.localeCompare(b.date));
     });
+    return index;
   }
 
   // ---------- Numerics ----------
@@ -1982,16 +2046,20 @@ https://link.strong.app/sample-7-fri-lower
     return m;
   }
   function withinDays(dateISO, days) {
-    const today = new Date(referenceDateISO() + 'T00:00:00'); today.setHours(0,0,0,0);
+    return withinDaysFrom(dateISO, days, referenceDateISO());
+  }
+  function withinDaysFrom(dateISO, days, anchorISO) {
+    const today = new Date(anchorISO + 'T00:00:00'); today.setHours(0,0,0,0);
     const d = new Date(dateISO + 'T00:00:00');
     return (today - d) / 86400000 <= days;
   }
 
   // ---------- PR detection ----------
   // For each exercise, find first occurrence of: max e1RM, max raw weight, max reps@weight bucket.
-  function detectPRs() {
+  function detectPRs(index) {
+    index = index || EXERCISE_INDEX;
     const prs = []; // { date, exercise, type, value, set }
-    for (const ex of Object.values(EXERCISE_INDEX)) {
+    for (const ex of Object.values(index)) {
       let bestE = 0;
       let bestW = 0;
       const repsAtWeight = {}; // weight -> max reps seen so far
@@ -2061,8 +2129,9 @@ https://link.strong.app/sample-7-fri-lower
     return { label: 'Advanced', factor: 0.55 };
   }
 
-  function forecastExercise(key) {
-    const ex = EXERCISE_INDEX[key];
+  function forecastExercise(key, index) {
+    index = index || EXERCISE_INDEX;
+    const ex = index[key];
     if (!ex) return null;
     // Best e1RM per session, in chronological order
     const points = [];
@@ -2136,6 +2205,15 @@ https://link.strong.app/sample-7-fri-lower
   }
 
   let CURRENT = { view: 'overview', params: {} };
+  let FILTERS = {
+    date: 'all',
+    start: '',
+    end: '',
+    muscle: 'all',
+    exercise: 'all',
+    equipment: 'all',
+    q: '',
+  };
 
   function go(view, params) {
     CURRENT = { view, params: params || {} };
@@ -2185,6 +2263,248 @@ https://link.strong.app/sample-7-fri-lower
       : '—';
     document.getElementById('footer-stats').textContent =
       `${totalSessions} sessions · ${fmt(totalSets)} sets · ${range}`;
+  }
+
+  function refreshCurrentView() {
+    destroyCharts();
+    render();
+    updateFooter();
+  }
+
+  function allMuscles() {
+    return [...new Set(Object.values(EXERCISE_INDEX).map((e) => e.muscle_group || 'Other'))].sort();
+  }
+  function allEquipment() {
+    const vals = new Set();
+    Object.values(EXERCISE_INDEX).forEach((e) => e.equipment_options.forEach((x) => vals.add(x || '—')));
+    return [...vals].sort();
+  }
+  function allExercises() {
+    return Object.values(EXERCISE_INDEX).slice().sort((a, b) => exerciseLabel(a).localeCompare(exerciseLabel(b)));
+  }
+
+  function activeDateRange() {
+    if (!SESSIONS.length) return { start: '', end: '', label: 'All dates' };
+    const first = SESSIONS[0].date;
+    const last = SESSIONS[SESSIONS.length - 1].date;
+    if (FILTERS.date === 'custom') {
+      return {
+        start: FILTERS.start || first,
+        end: FILTERS.end || last,
+        label: `${FILTERS.start || first} → ${FILTERS.end || last}`,
+      };
+    }
+    if (FILTERS.date !== 'all') {
+      const days = Number(FILTERS.date);
+      const start = new Date(last + 'T00:00:00');
+      start.setDate(start.getDate() - days + 1);
+      return { start: start.toISOString().slice(0, 10), end: last, label: `Last ${days} days` };
+    }
+    return { start: first, end: last, label: 'All dates' };
+  }
+
+  function matchesText(session, ex, q) {
+    if (!q) return true;
+    const sessionBlob = [
+      session.date,
+      session.day_of_week,
+      session.template,
+      session.share_link,
+      ...(session.notes || []),
+    ].join(' ').toLowerCase();
+    const exBlob = [
+      ex && ex.name,
+      ex && ex.equipment,
+      ex && ex.muscle_group,
+      ...((ex && ex.notes) || []),
+    ].join(' ').toLowerCase();
+    return sessionBlob.includes(q) || exBlob.includes(q);
+  }
+
+  function exercisePassesFilters(ex) {
+    if (FILTERS.muscle !== 'all' && ex.muscle_group !== FILTERS.muscle) return false;
+    if (FILTERS.exercise !== 'all' && exerciseKey(ex) !== FILTERS.exercise) return false;
+    if (FILTERS.equipment !== 'all' && (ex.equipment || '—') !== FILTERS.equipment) return false;
+    return true;
+  }
+
+  function getFilteredSessions() {
+    const range = activeDateRange();
+    const q = FILTERS.q.trim().toLowerCase();
+    return SESSIONS
+      .filter((s) => s.date >= range.start && s.date <= range.end)
+      .map((s) => {
+        const exercises = s.exercises.filter((ex) => exercisePassesFilters(ex) && matchesText(s, ex, q));
+        return exercises.length ? { ...s, exercises } : null;
+      })
+      .filter(Boolean);
+  }
+  function sessionExerciseKeySet(sessions) {
+    const keys = new Set();
+    sessions.forEach((s) => {
+      s.exercises.forEach((ex) => keys.add(`${s.date}|${exerciseKey(ex)}`));
+    });
+    return keys;
+  }
+
+  function sessionVolume(s) {
+    return s.exercises.reduce((a, ex) => a + totalVolume(ex.sets), 0);
+  }
+  function sessionSetCount(s) {
+    return s.exercises.reduce((a, ex) => a + ex.sets.length, 0);
+  }
+  function weeklyVolumeMap(sessions) {
+    const map = {};
+    for (const s of sessions) {
+      const w = weekStart(s.date);
+      map[w] = (map[w] || 0) + sessionVolume(s);
+    }
+    return map;
+  }
+  function exerciseStats(ex) {
+    const e1rms = ex.instances.map((inst) => bestE1rm(inst.sets)).filter((x) => x > 0);
+    const first = e1rms[0] || 0;
+    const last = e1rms[e1rms.length - 1] || 0;
+    const trend = first > 0 ? ((last - first) / first) * 100 : 0;
+    const volume = ex.instances.reduce((a, inst) => a + totalVolume(inst.sets), 0);
+    const sets = ex.instances.reduce((a, inst) => a + inst.sets.filter((s) => !s.warmup).length, 0);
+    const top = ex.instances
+      .flatMap((i) => i.sets)
+      .filter((s) => s.type === 'weighted' && !s.warmup)
+      .reduce((best, s) => (!best || s.e1rm > best.e1rm ? s : best), null);
+    return { first, last, trend, volume, sets, top };
+  }
+
+  function sortSessions(sessions, sort) {
+    const out = sessions.slice();
+    const byDate = (a, b) => a.date.localeCompare(b.date);
+    if (sort === 'oldest') out.sort(byDate);
+    else if (sort === 'volume') out.sort((a, b) => sessionVolume(b) - sessionVolume(a) || byDate(b, a));
+    else if (sort === 'sets') out.sort((a, b) => sessionSetCount(b) - sessionSetCount(a) || byDate(b, a));
+    else out.sort((a, b) => byDate(b, a));
+    return out;
+  }
+
+  function sortExercises(exercises, sort) {
+    const out = exercises.slice();
+    const stats = new Map(out.map((ex) => [ex.key, exerciseStats(ex)]));
+    const byName = (a, b) => exerciseLabel(a).localeCompare(exerciseLabel(b));
+    if (sort === 'name') out.sort(byName);
+    else if (sort === 'best') out.sort((a, b) => stats.get(b.key).last - stats.get(a.key).last || byName(a, b));
+    else if (sort === 'trend') out.sort((a, b) => stats.get(b.key).trend - stats.get(a.key).trend || byName(a, b));
+    else if (sort === 'volume') out.sort((a, b) => stats.get(b.key).volume - stats.get(a.key).volume || byName(a, b));
+    else out.sort((a, b) => b.instances.length - a.instances.length || byName(a, b));
+    return out;
+  }
+
+  function sortPRs(prs, sort) {
+    const out = prs.slice();
+    if (sort === 'exercise') out.sort((a, b) => a.exercise.localeCompare(b.exercise) || b.date.localeCompare(a.date));
+    else if (sort === 'type') out.sort((a, b) => a.type.localeCompare(b.type) || b.date.localeCompare(a.date));
+    else if (sort === 'value') out.sort((a, b) => b.value - a.value || b.date.localeCompare(a.date));
+    else out.sort((a, b) => b.date.localeCompare(a.date));
+    return out;
+  }
+
+  function filterSummary(sessions) {
+    const sets = sessions.reduce((a, s) => a + sessionSetCount(s), 0);
+    const volume = sessions.reduce((a, s) => a + sessionVolume(s), 0);
+    const range = activeDateRange();
+    const parts = [range.label, `${sessions.length} sessions`, `${fmt(sets)} sets`, `${fmt(volume)} lb`];
+    if (FILTERS.muscle !== 'all') parts.push(FILTERS.muscle);
+    if (FILTERS.equipment !== 'all') parts.push(FILTERS.equipment);
+    if (FILTERS.exercise !== 'all' && EXERCISE_INDEX[FILTERS.exercise]) parts.push(exerciseLabel(EXERCISE_INDEX[FILTERS.exercise]));
+    if (FILTERS.q.trim()) parts.push(`"${FILTERS.q.trim()}"`);
+    return parts.join(' · ');
+  }
+
+  function renderFilterBar(sessions) {
+    const range = activeDateRange();
+    const exerciseOptions = allExercises();
+    return `
+      <section class="filter-panel" aria-label="Dashboard filters">
+        <div class="filter-grid">
+          <label>Date
+            <select id="gf-date">
+              <option value="all" ${FILTERS.date === 'all' ? 'selected' : ''}>All dates</option>
+              <option value="30" ${FILTERS.date === '30' ? 'selected' : ''}>Last 30 days</option>
+              <option value="60" ${FILTERS.date === '60' ? 'selected' : ''}>Last 60 days</option>
+              <option value="90" ${FILTERS.date === '90' ? 'selected' : ''}>Last 90 days</option>
+              <option value="custom" ${FILTERS.date === 'custom' ? 'selected' : ''}>Custom</option>
+            </select>
+          </label>
+          <label>From
+            <input type="date" id="gf-start" value="${escapeHTML(FILTERS.start || range.start)}" ${FILTERS.date === 'custom' ? '' : 'disabled'} />
+          </label>
+          <label>To
+            <input type="date" id="gf-end" value="${escapeHTML(FILTERS.end || range.end)}" ${FILTERS.date === 'custom' ? '' : 'disabled'} />
+          </label>
+          <label>Muscle
+            <select id="gf-muscle">
+              <option value="all" ${FILTERS.muscle === 'all' ? 'selected' : ''}>All muscles</option>
+              ${allMuscles().map((m) => `<option value="${escapeHTML(m)}" ${FILTERS.muscle === m ? 'selected' : ''}>${escapeHTML(m)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Exercise
+            <select id="gf-exercise">
+              <option value="all" ${FILTERS.exercise === 'all' ? 'selected' : ''}>All exercises</option>
+              ${exerciseOptions.map((ex) => `<option value="${escapeHTML(ex.key)}" ${FILTERS.exercise === ex.key ? 'selected' : ''}>${escapeHTML(exerciseLabel(ex))}</option>`).join('')}
+            </select>
+          </label>
+          <label>Equipment
+            <select id="gf-equipment">
+              <option value="all" ${FILTERS.equipment === 'all' ? 'selected' : ''}>All equipment</option>
+              ${allEquipment().map((eq) => `<option value="${escapeHTML(eq)}" ${FILTERS.equipment === eq ? 'selected' : ''}>${escapeHTML(eq)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="filter-search">Search
+            <input type="search" id="gf-search" placeholder="Exercise, note, template..." value="${escapeHTML(FILTERS.q)}" />
+          </label>
+          <button class="btn-ghost" id="gf-reset">Reset</button>
+        </div>
+        <div class="filter-summary">${escapeHTML(filterSummary(sessions))}</div>
+      </section>
+    `;
+  }
+
+  function attachFilterBar() {
+    const date = document.getElementById('gf-date');
+    if (!date) return;
+    date.addEventListener('change', (e) => {
+      FILTERS.date = e.target.value;
+      refreshCurrentView();
+    });
+    document.getElementById('gf-start').addEventListener('change', (e) => {
+      FILTERS.date = 'custom';
+      FILTERS.start = e.target.value;
+      refreshCurrentView();
+    });
+    document.getElementById('gf-end').addEventListener('change', (e) => {
+      FILTERS.date = 'custom';
+      FILTERS.end = e.target.value;
+      refreshCurrentView();
+    });
+    document.getElementById('gf-muscle').addEventListener('change', (e) => {
+      FILTERS.muscle = e.target.value;
+      refreshCurrentView();
+    });
+    document.getElementById('gf-exercise').addEventListener('change', (e) => {
+      FILTERS.exercise = e.target.value;
+      refreshCurrentView();
+    });
+    document.getElementById('gf-equipment').addEventListener('change', (e) => {
+      FILTERS.equipment = e.target.value;
+      refreshCurrentView();
+    });
+    document.getElementById('gf-search').addEventListener('input', (e) => {
+      FILTERS.q = e.target.value;
+      clearTimeout(window.__gf);
+      window.__gf = setTimeout(refreshCurrentView, 180);
+    });
+    document.getElementById('gf-reset').addEventListener('click', () => {
+      FILTERS = { date: 'all', start: '', end: '', muscle: 'all', exercise: 'all', equipment: 'all', q: '' };
+      refreshCurrentView();
+    });
   }
 
   // ---------- Shared: load workout data (CSV or markdown) ----------
@@ -2463,34 +2783,54 @@ https://link.strong.app/sample-7-fri-lower
 
   // ---------- View: Overview ----------
   function renderOverview() {
-    const totalSessions = SESSIONS.length;
-    if (!totalSessions) {
+    const allSessions = SESSIONS.length;
+    if (!allSessions) {
       app.innerHTML = `<div class="empty">No sessions yet. Use the <strong>Import</strong> tab to paste in a Strong app export.</div>`;
       return;
     }
-    const firstDate = SESSIONS[0].date;
-    const lastDate = SESSIONS[SESSIONS.length - 1].date;
+    const filteredSessions = getFilteredSessions();
+    const fullVol = SESSIONS.reduce((a, s) => a + sessionVolume(s), 0);
+    const fullSets = SESSIONS.reduce((a, s) => a + sessionSetCount(s), 0);
+    const fullFirstDate = SESSIONS[0].date;
+    const fullLastDate = SESSIONS[SESSIONS.length - 1].date;
+    const fullWeekMap = weeklyVolumeMap(SESSIONS);
+    const fullWeeks = Object.keys(fullWeekMap).sort();
+    if (!filteredSessions.length) {
+      app.innerHTML = `
+        <div class="dashboard-screen">
+          ${trainerIntroHTML(fullFirstDate, fullLastDate, allSessions, fullSets, fullVol)}
+          <div class="section-head">
+            <h1>Overview</h1>
+            <span class="sub">No matching training data</span>
+          </div>
+          ${renderFilterBar(filteredSessions)}
+          <div class="empty">No sessions match the current filters.</div>
+        </div>
+        ${printReportHTML({ firstDate: fullFirstDate, lastDate: fullLastDate, totalSessions: allSessions, totalSets: fullSets, totalVol: fullVol, weekMap: fullWeekMap, weeks: fullWeeks })}
+      `;
+      attachFilterBar();
+      const printBtn = document.getElementById('print-summary');
+      if (printBtn) printBtn.addEventListener('click', () => window.print());
+      return;
+    }
+    const totalSessions = filteredSessions.length;
+    const firstDate = filteredSessions[0].date;
+    const lastDate = filteredSessions[filteredSessions.length - 1].date;
     const totalDays = dayDiff(firstDate, lastDate) + 1;
-    const totalVol = SESSIONS.reduce(
-      (a, s) => a + s.exercises.reduce((b, ex) => b + totalVolume(ex.sets), 0), 0
-    );
-    const totalSets = SESSIONS.reduce(
-      (a, s) => a + s.exercises.reduce((b, ex) => b + ex.sets.length, 0), 0
-    );
+    const totalVol = filteredSessions.reduce((a, s) => a + sessionVolume(s), 0);
+    const totalSets = filteredSessions.reduce((a, s) => a + sessionSetCount(s), 0);
     const sessionsPerWeek = (totalSessions / (totalDays / 7)).toFixed(1);
 
     // Last-30-day stats
-    const recent = SESSIONS.filter((s) => withinDays(s.date, 30));
-    const recentVol = recent.reduce(
-      (a, s) => a + s.exercises.reduce((b, ex) => b + totalVolume(ex.sets), 0), 0
-    );
+    const recent = filteredSessions.filter((s) => withinDaysFrom(s.date, 30, lastDate));
+    const recentVol = recent.reduce((a, s) => a + sessionVolume(s), 0);
     const muscle30 = setsByMuscle(recent);
     const recentLabel = `30d ending ${shortDate(lastDate)}`;
 
     // Streak: longest gap of <=4 days in a row → consecutive workout streak
     let streak = 0, longestStreak = 0;
     let prev = null;
-    for (const s of SESSIONS) {
+    for (const s of filteredSessions) {
       if (prev && dayDiff(prev, s.date) <= 4) streak++;
       else streak = 1;
       if (streak > longestStreak) longestStreak = streak;
@@ -2498,14 +2838,18 @@ https://link.strong.app/sample-7-fri-lower
     }
 
     // PRs (recent)
+    const prSort = CURRENT.params.prSort || 'newest';
+    const visibleExerciseDates = sessionExerciseKeySet(filteredSessions);
     const allPRs = detectPRs();
-    const recentPRs = allPRs.filter((p) => withinDays(p.date, 30)).slice(0, 6);
+    const recentPRs = sortPRs(allPRs
+      .filter((p) => visibleExerciseDates.has(`${p.date}|${p.exerciseKey}`) && withinDaysFrom(p.date, 30, lastDate))
+    , prSort).slice(0, 6);
 
     // Weekly volume series
     const weekMap = {};
-    for (const s of SESSIONS) {
+    for (const s of filteredSessions) {
       const w = weekStart(s.date);
-      const v = s.exercises.reduce((b, ex) => b + totalVolume(ex.sets), 0);
+      const v = sessionVolume(s);
       weekMap[w] = (weekMap[w] || 0) + v;
     }
     const weeks = Object.keys(weekMap).sort();
@@ -2513,11 +2857,12 @@ https://link.strong.app/sample-7-fri-lower
 
     app.innerHTML = `
       <div class="dashboard-screen">
-        ${trainerIntroHTML(firstDate, lastDate, totalSessions, totalSets, totalVol)}
+        ${trainerIntroHTML(fullFirstDate, fullLastDate, allSessions, fullSets, fullVol)}
         <div class="section-head">
           <h1>Overview</h1>
-          <span class="sub">${pretty(firstDate)} → ${pretty(lastDate)} · ${fmt(totalDays)} days of training data</span>
+          <span class="sub">${pretty(firstDate)} → ${pretty(lastDate)} · ${fmt(totalDays)} days in view</span>
         </div>
+        ${renderFilterBar(filteredSessions)}
 
         <div class="grid cols-4" style="margin-bottom:18px;">
           <div class="panel kpi kpi-accent">
@@ -2555,7 +2900,15 @@ https://link.strong.app/sample-7-fri-lower
 
         <div class="grid cols-2" style="margin-bottom:18px;">
           <div class="panel">
-            <h2>Recent PRs (${recentLabel})</h2>
+            <div class="panel-title-row">
+              <h2>Recent PRs (${recentLabel})</h2>
+              <select id="pr-sort" class="compact-select" aria-label="Sort PRs">
+                <option value="newest" ${prSort === 'newest' ? 'selected' : ''}>Newest</option>
+                <option value="value" ${prSort === 'value' ? 'selected' : ''}>Value</option>
+                <option value="exercise" ${prSort === 'exercise' ? 'selected' : ''}>Exercise</option>
+                <option value="type" ${prSort === 'type' ? 'selected' : ''}>Type</option>
+              </select>
+            </div>
             ${recentPRs.length === 0
               ? `<div class="empty" style="padding:14px;">No PRs in the ${recentLabel}. Plateaus build the foundation for breakthroughs.</div>`
               : `<div class="ex-list">${recentPRs
@@ -2585,7 +2938,7 @@ https://link.strong.app/sample-7-fri-lower
           </div>
         </div>
       </div>
-      ${printReportHTML({ firstDate, lastDate, totalSessions, totalSets, totalVol, weekMap, weeks })}
+      ${printReportHTML({ firstDate: fullFirstDate, lastDate: fullLastDate, totalSessions: allSessions, totalSets: fullSets, totalVol: fullVol, weekMap: fullWeekMap, weeks: fullWeeks })}
     `;
 
     // Volume chart
@@ -2626,11 +2979,17 @@ https://link.strong.app/sample-7-fri-lower
     );
 
     // Heatmap
-    renderHeatmap(document.getElementById('heatmap-host'));
+    renderHeatmap(document.getElementById('heatmap-host'), filteredSessions, lastDate);
 
     // PR row click → exercise detail
     app.querySelectorAll('.ex-row[data-jump]').forEach((el) => {
       el.addEventListener('click', () => go('exercise', { name: el.dataset.jump }));
+    });
+    attachFilterBar();
+    const prSortEl = document.getElementById('pr-sort');
+    if (prSortEl) prSortEl.addEventListener('change', (e) => {
+      CURRENT.params.prSort = e.target.value;
+      refreshCurrentView();
     });
     const printBtn = document.getElementById('print-summary');
     if (printBtn) printBtn.addEventListener('click', () => window.print());
@@ -2646,9 +3005,10 @@ https://link.strong.app/sample-7-fri-lower
     return map[name] || '#6b7384';
   }
 
-  function renderHeatmap(host) {
-    if (!SESSIONS.length) return;
-    const today = new Date(referenceDateISO() + 'T00:00:00'); today.setHours(0,0,0,0);
+  function renderHeatmap(host, sessions, anchorDate) {
+    sessions = sessions || SESSIONS;
+    if (!sessions.length) return;
+    const today = new Date((anchorDate || referenceDateISO()) + 'T00:00:00'); today.setHours(0,0,0,0);
     const days = 365;
     const start = new Date(today); start.setDate(start.getDate() - (days - 1));
     // Adjust start to Monday
@@ -2657,7 +3017,7 @@ https://link.strong.app/sample-7-fri-lower
     const totalDays = Math.round((today - start) / 86400000) + 1;
 
     const sessionByDay = {};
-    for (const s of SESSIONS) sessionByDay[s.date] = (sessionByDay[s.date] || 0) + 1;
+    for (const s of sessions) sessionByDay[s.date] = (sessionByDay[s.date] || 0) + 1;
 
     const grid = document.createElement('div');
     grid.className = 'heatmap';
@@ -2688,7 +3048,7 @@ https://link.strong.app/sample-7-fri-lower
         dt.setDate(dt.getDate() + w * 7 + d);
         const cell = document.createElement('div');
         cell.className = 'day';
-        if (dt > today || dt < new Date(SESSIONS[0].date + 'T00:00:00')) {
+        if (dt > today || dt < new Date(sessions[0].date + 'T00:00:00')) {
           cell.style.opacity = 0.25;
         } else {
           const key = dt.toISOString().slice(0, 10);
@@ -2717,35 +3077,27 @@ https://link.strong.app/sample-7-fri-lower
 
   // ---------- View: History ----------
   function renderHistory() {
-    const muscleFilter = CURRENT.params.muscle || 'all';
-    const search = (CURRENT.params.q || '').trim().toLowerCase();
-    const muscles = ['all', ...new Set(Object.values(EXERCISE_INDEX).map((e) => e.muscle_group))];
+    const sort = CURRENT.params.sort || 'newest';
+    const filtered = sortSessions(getFilteredSessions(), sort);
 
     app.innerHTML = `
       <div class="section-head">
         <h1>History</h1>
-        <span class="sub">${SESSIONS.length} sessions · click a card to expand</span>
+        <span class="sub">${filtered.length} sessions in view · click a card to expand</span>
       </div>
+      ${renderFilterBar(filtered)}
       <div class="toolbar">
-        <input type="search" id="hsearch" placeholder="Search exercise, note, or template…" value="${search.replace(/"/g, '&quot;')}" style="flex:1; min-width: 220px;" />
-        <select id="hmuscle">
-          ${muscles.map((m) => `<option value="${m}" ${m === muscleFilter ? 'selected' : ''}>${m === 'all' ? 'All muscle groups' : m}</option>`).join('')}
+        <select id="history-sort">
+          <option value="newest" ${sort === 'newest' ? 'selected' : ''}>Newest first</option>
+          <option value="oldest" ${sort === 'oldest' ? 'selected' : ''}>Oldest first</option>
+          <option value="volume" ${sort === 'volume' ? 'selected' : ''}>Highest volume</option>
+          <option value="sets" ${sort === 'sets' ? 'selected' : ''}>Most sets</option>
         </select>
       </div>
       <div id="session-list"></div>
     `;
 
     const list = document.getElementById('session-list');
-    const reversed = SESSIONS.slice().reverse();
-    const filtered = reversed.filter((s) => {
-      const muscles = new Set(s.exercises.map((e) => e.muscle_group));
-      if (muscleFilter !== 'all' && !muscles.has(muscleFilter)) return false;
-      if (search) {
-        const blob = JSON.stringify(s).toLowerCase();
-        if (!blob.includes(search)) return false;
-      }
-      return true;
-    });
 
     if (!filtered.length) {
       list.innerHTML = '<div class="empty">No sessions match those filters.</div>';
@@ -2763,15 +3115,10 @@ https://link.strong.app/sample-7-fri-lower
       });
     }
 
-    document.getElementById('hsearch').addEventListener('input', (e) => {
-      CURRENT.params.q = e.target.value;
-      // Light debounce
-      clearTimeout(window.__hs);
-      window.__hs = setTimeout(() => renderHistory(), 200);
-    });
-    document.getElementById('hmuscle').addEventListener('change', (e) => {
-      CURRENT.params.muscle = e.target.value;
-      renderHistory();
+    attachFilterBar();
+    document.getElementById('history-sort').addEventListener('change', (e) => {
+      CURRENT.params.sort = e.target.value;
+      refreshCurrentView();
     });
   }
 
@@ -2834,22 +3181,16 @@ https://link.strong.app/sample-7-fri-lower
 
   // ---------- View: Exercises ----------
   function renderExercises() {
-    const exs = Object.values(EXERCISE_INDEX).slice().sort(
-      (a, b) => b.instances.length - a.instances.length
-    );
+    const sort = CURRENT.params.sort || 'sessions';
+    const scopedIndex = buildExerciseIndex(getFilteredSessions());
+    const exs = sortExercises(Object.values(scopedIndex), sort);
 
     const rows = exs.map((ex) => {
-      // Last vs first session: e1RM trend
-      const e1rms = ex.instances.map((inst) => bestE1rm(inst.sets)).filter((x) => x > 0);
-      const last = e1rms[e1rms.length - 1] || 0;
-      const first = e1rms[0] || 0;
-      const delta = first > 0 ? ((last - first) / first) * 100 : 0;
+      const stats = exerciseStats(ex);
+      const last = stats.last;
+      const delta = stats.trend;
       const trendCls = delta > 3 ? 'up' : delta < -3 ? 'down' : 'flat';
       const trendIcon = delta > 3 ? '↑' : delta < -3 ? '↓' : '→';
-      const top = ex.instances
-        .flatMap((i) => i.sets)
-        .filter((s) => s.type === 'weighted' && !s.warmup)
-        .reduce((best, s) => (!best || s.e1rm > best.e1rm ? s : best), null);
 
       return `
         <div class="ex-row" data-name="${escapeHTML(ex.key)}">
@@ -2863,7 +3204,7 @@ https://link.strong.app/sample-7-fri-lower
           </div>
           <div>
             <div class="stat-label">Top set</div>
-            <div class="stat-value">${top ? `${fmt(top.weight)} × ${top.reps}` : '—'}</div>
+            <div class="stat-value">${stats.top ? `${fmt(stats.top.weight)} × ${stats.top.reps}` : '—'}</div>
           </div>
           <div>
             <div class="stat-label">Best e1RM</div>
@@ -2879,8 +3220,23 @@ https://link.strong.app/sample-7-fri-lower
         <h1>Exercises</h1>
         <span class="sub">${exs.length} unique exercise variants</span>
       </div>
-      <div class="ex-list">${rows}</div>
+      ${renderFilterBar(getFilteredSessions())}
+      <div class="toolbar">
+        <select id="exercise-sort">
+          <option value="sessions" ${sort === 'sessions' ? 'selected' : ''}>Most sessions</option>
+          <option value="best" ${sort === 'best' ? 'selected' : ''}>Best e1RM</option>
+          <option value="trend" ${sort === 'trend' ? 'selected' : ''}>Best trend</option>
+          <option value="volume" ${sort === 'volume' ? 'selected' : ''}>Most volume</option>
+          <option value="name" ${sort === 'name' ? 'selected' : ''}>Name</option>
+        </select>
+      </div>
+      ${rows ? `<div class="ex-list">${rows}</div>` : '<div class="empty">No exercises match those filters.</div>'}
     `;
+    attachFilterBar();
+    document.getElementById('exercise-sort').addEventListener('change', (e) => {
+      CURRENT.params.sort = e.target.value;
+      refreshCurrentView();
+    });
     app.querySelectorAll('.ex-row[data-name]').forEach((el) => {
       el.addEventListener('click', () => go('exercise', { name: el.dataset.name }));
     });
@@ -2888,9 +3244,20 @@ https://link.strong.app/sample-7-fri-lower
 
   // ---------- View: Exercise detail ----------
   function renderExerciseDetail(name) {
-    const ex = EXERCISE_INDEX[name];
+    const filteredSessions = getFilteredSessions();
+    const scopedIndex = buildExerciseIndex(filteredSessions);
+    const ex = scopedIndex[name];
     if (!ex) {
-      app.innerHTML = `<div class="empty">Exercise not found.</div>`;
+      app.innerHTML = `
+        <a href="#" class="back-btn" id="back-ex">← All exercises</a>
+        ${renderFilterBar(filteredSessions)}
+        <div class="empty">Exercise not found in the current filters.</div>
+      `;
+      attachFilterBar();
+      document.getElementById('back-ex').addEventListener('click', (e) => {
+        e.preventDefault();
+        go('exercises');
+      });
       return;
     }
     const labels = ex.instances.map((i) => i.date);
@@ -2903,6 +3270,7 @@ https://link.strong.app/sample-7-fri-lower
 
     app.innerHTML = `
       <a href="#" class="back-btn" id="back-ex">← All exercises</a>
+      ${renderFilterBar(filteredSessions)}
       <div class="ex-detail-head">
         <div>
           <h1>${escapeHTML(ex.name)}</h1>
@@ -2968,6 +3336,7 @@ https://link.strong.app/sample-7-fri-lower
     document.getElementById('forecast-jump').addEventListener('click', () => {
       go('forecast', { name: ex.key });
     });
+    attachFilterBar();
 
     const opts = chartOpts({ y: 'lb' });
     CHARTS.push(new Chart(document.getElementById('ex-e1rm'), {
@@ -3021,16 +3390,20 @@ https://link.strong.app/sample-7-fri-lower
 
   // ---------- View: Forecast ----------
   function renderForecast(name) {
-    const exs = Object.values(EXERCISE_INDEX)
+    const sort = CURRENT.params.sort || 'sessions';
+    const filteredSessions = getFilteredSessions();
+    const scopedIndex = buildExerciseIndex(filteredSessions);
+    const exs = sortExercises(Object.values(scopedIndex)
       .filter((e) => e.instances.some((i) => bestE1rm(i.sets) > 0))
-      .sort((a, b) => b.instances.length - a.instances.length);
-    if (!name) name = exs[0] ? exs[0].key : null;
+    , sort);
+    if (!name || !scopedIndex[name]) name = exs[0] ? exs[0].key : null;
 
     app.innerHTML = `
       <div class="section-head">
         <h1>Forecast</h1>
         <span class="sub">3 / 6 / 12 month projections grounded in physiology</span>
       </div>
+      ${renderFilterBar(filteredSessions)}
 
       <div class="callout">
         <strong>How this works:</strong> e1RM is computed via the Epley formula
@@ -3045,28 +3418,40 @@ https://link.strong.app/sample-7-fri-lower
         <select id="fselect" style="min-width: 260px;">
           ${exs.map((e) => `<option value="${escapeHTML(e.key)}" ${e.key === name ? 'selected' : ''}>${escapeHTML(exerciseLabel(e))} · ${e.instances.length} sessions</option>`).join('')}
         </select>
+        <select id="forecast-sort">
+          <option value="sessions" ${sort === 'sessions' ? 'selected' : ''}>Most sessions</option>
+          <option value="best" ${sort === 'best' ? 'selected' : ''}>Best e1RM</option>
+          <option value="trend" ${sort === 'trend' ? 'selected' : ''}>Best trend</option>
+          <option value="volume" ${sort === 'volume' ? 'selected' : ''}>Most volume</option>
+          <option value="name" ${sort === 'name' ? 'selected' : ''}>Name</option>
+        </select>
       </div>
 
       <div id="forecast-host"></div>
     `;
 
+    attachFilterBar();
     document.getElementById('fselect').addEventListener('change', (e) => {
       go('forecast', { name: e.target.value });
     });
+    document.getElementById('forecast-sort').addEventListener('change', (e) => {
+      CURRENT.params.sort = e.target.value;
+      refreshCurrentView();
+    });
 
     if (!name) return;
-    renderForecastFor(name);
+    renderForecastFor(name, scopedIndex);
   }
 
-  function renderForecastFor(name) {
+  function renderForecastFor(name, index) {
     const host = document.getElementById('forecast-host');
-    const fc = forecastExercise(name);
+    const fc = forecastExercise(name, index);
     if (!fc || fc.message) {
       host.innerHTML = `<div class="empty">${fc ? fc.message : 'No data.'}</div>`;
       return;
     }
     const { points, fit, trainingAge, lastY, sigma, projections } = fc;
-    const ex = EXERCISE_INDEX[name];
+    const ex = index[name];
     const label = ex ? exerciseLabel(ex) : name;
 
     // Build dataset: historical points + future projection curve
